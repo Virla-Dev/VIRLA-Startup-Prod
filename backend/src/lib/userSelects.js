@@ -16,7 +16,7 @@ export const USER_PUBLIC_SELECT = {
   role: true,
   bio: true,
   profileImage: true,
-  crm_crf: true,
+  council: true,
   registerNumber: true,
   hourlyRate: true,
   specialties: true,
@@ -30,4 +30,5 @@ export const USER_SELF_SELECT = {
   ...USER_PUBLIC_SELECT,
   email: true,
   cpf: true,
+  zipCode: true,
 }

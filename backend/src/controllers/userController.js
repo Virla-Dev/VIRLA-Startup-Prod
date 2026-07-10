@@ -1,13 +1,14 @@
-import bcrypt from 'bcrypt'
 import {
   getUserById,
-  getUserByEmail,
   emailExists,
-  createUser,
+  cpfExists,
+  registerExists,
+  createUserWithId,
   updateUser,
   deleteUser,
   listByRole,
 } from '../repositories/userRepository.js'
+import { firebaseAdmin } from '../lib/firebase.js'
 import { project } from '../repositories/_helpers.js'
 import { authLogger, logger } from '../lib/logger.js'
 import { USER_PUBLIC_SELECT, USER_SELF_SELECT } from '../lib/userSelects.js'
@@ -50,25 +51,18 @@ function parseSpecialties(value) {
   return []
 }
 
-/** Body já validado por createUserBodySchema (Zod) em userRoutes. */
+/**
+ * POST /users — cria o PERFIL do usuário já autenticado no Firebase Auth.
+ * O uid e o e-mail vêm do token verificado (checkTokenAllowUnverified), não do
+ * body. Body validado por createUserBodySchema (sem senha/email).
+ */
 const createUsers = async (req, res) => {
+  const uid = req.userId
+  const email = req.email
   const {
-    name,
-    birthDate: birthDateRaw,
-    role,
-    bio,
-    email,
-    cpf,
-    password,
-    profileImage,
-    crm_crf,
-    hourlyRate: hourlyRateRaw,
-    registerNumber,
-    approach,
-    specialties,
-    description,
-    city,
-    state,
+    name, birthDate: birthDateRaw, role, bio, cpf,
+    profileImage, council, hourlyRate: hourlyRateRaw, registerNumber,
+    approach, specialties, description, city, state, zipCode,
   } = req.body
 
   const birthDate = parseBirthDate(birthDateRaw)
@@ -78,26 +72,31 @@ const createUsers = async (req, res) => {
   }
 
   try {
-    const existing = await getUserByEmail(email)
-    if (existing) {
+    // Idempotência: se o perfil já existe (retry), não recria.
+    const already = await getUserById(uid)
+    if (already) {
+      const user = project(already, USER_SELF_SELECT)
+      return res.status(200).json({ user })
+    }
+    if (await emailExists(email, uid)) {
       return res.status(409).json({ msg: 'Este e-mail já está cadastrado' })
     }
+    if (await cpfExists(cpf, uid)) {
+      return res.status(409).json({ msg: 'Este CPF já está cadastrado' })
+    }
+    if (council && registerNumber && (await registerExists(council, registerNumber, uid))) {
+      return res.status(409).json({ msg: 'Este registro profissional já está cadastrado.' })
+    }
 
-    // Hash só DEPOIS de confirmar que o e-mail é novo: bcrypt(12) custa ~100ms
-    // de CPU; rodá-lo antes do check deixaria o endpoint vulnerável a abuso
-    // (um bot forçaria o hash repetindo e-mails já cadastrados).
-    const passwordHash = await bcrypt.hash(password, 12)
-
-    const created = await createUser({
+    const created = await createUserWithId(uid, {
       name,
       birthDate,
       role,
       bio: bio ?? '',
       email,
       cpf: cpf ?? null,
-      password: passwordHash,
       profileImage: emptyToNull(profileImage),
-      crm_crf: role === 'CUIDADOR' ? emptyToNull(crm_crf) : null,
+      council: role === 'CUIDADOR' ? (council || null) : null,
       registerNumber: emptyToNull(registerNumber),
       hourlyRate,
       specialties: parseSpecialties(specialties),
@@ -105,21 +104,17 @@ const createUsers = async (req, res) => {
       description: emptyToNull(description),
       city: emptyToNull(city),
       state: emptyToNull(state),
+      zipCode: emptyToNull(zipCode),
     })
+
+    // role em custom claim → checkToken/requireRole leem sem read extra no Firestore.
+    await firebaseAdmin.auth().setCustomUserClaims(uid, { role })
+
     const user = project(created, USER_SELF_SELECT)
-    authLogger.info('auth:register_success', {
-      userId: created.id,
-      role: created.role,
-      ip: req.ip,
-      timestamp: new Date().toISOString(),
-    })
+    authLogger.info('auth:register_success', { userId: uid, role, ip: req.ip })
     return res.status(201).json({ user })
   } catch (error) {
-    logger.error('user:create_failed', {
-      error: error.message,
-      stack: error.stack,
-      endpoint: req.originalUrl,
-    })
+    logger.error('user:create_failed', { error: error.message, stack: error.stack, endpoint: req.originalUrl })
     return res.status(500).json({ msg: 'Erro ao criar conta. Tente novamente.' })
   }
 }
@@ -199,12 +194,11 @@ const updateUsers = async (req, res) => {
   }
 
   const data = {
-    ...(req.body.email != null && { email: req.body.email }),
     ...(req.body.name != null && { name: req.body.name }),
     ...(birthDate !== undefined && { birthDate }),
     ...(req.body.bio != null && { bio: req.body.bio }),
     ...(req.body.profileImage !== undefined && { profileImage: req.body.profileImage || null }),
-    ...(req.body.crm_crf !== undefined && { crm_crf: req.body.crm_crf || null }),
+    ...(req.body.council !== undefined && { council: req.body.council || null }),
     ...(req.body.registerNumber !== undefined && { registerNumber: req.body.registerNumber || null }),
     ...(hourlyRatePatch != null && hourlyRatePatch),
     ...(req.body.specialties !== undefined && { specialties: parseSpecialties(req.body.specialties) }),
@@ -212,14 +206,14 @@ const updateUsers = async (req, res) => {
     ...(req.body.description !== undefined && { description: req.body.description || null }),
     ...(req.body.city !== undefined && { city: req.body.city || null }),
     ...(req.body.state !== undefined && { state: req.body.state || null }),
+    ...(req.body.zipCode !== undefined && { zipCode: req.body.zipCode || null }),
+  }
+
+  if (data.council && data.registerNumber && (await registerExists(data.council, data.registerNumber, req.params.id))) {
+    return res.status(409).json({ msg: 'Este registro profissional já está cadastrado.' })
   }
 
   try {
-    // Unicidade de email no update (substitui o tratamento de P2002 do Prisma).
-    if (data.email != null && (await emailExists(data.email, req.params.id))) {
-      return res.status(409).json({ msg: 'Este e-mail já está cadastrado' })
-    }
-
     const updated = await updateUser(req.params.id, data)
     const user = project(updated, USER_SELF_SELECT)
     res.status(200).json({ user })
@@ -248,6 +242,12 @@ const deleteUsers = async (req, res) => {
 
   try {
     await deleteUser(req.params.id)
+    // Remove também a credencial no Firebase Auth (o id do perfil = uid).
+    try {
+      await firebaseAdmin.auth().deleteUser(req.params.id)
+    } catch (e) {
+      logger.warn('user:firebase_delete_failed', { userId: req.userId, error: e.message })
+    }
     authLogger.info('user:deleted', {
       userId: req.userId,
       timestamp: new Date().toISOString(),

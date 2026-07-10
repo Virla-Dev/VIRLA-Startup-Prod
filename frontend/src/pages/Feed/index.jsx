@@ -15,6 +15,7 @@ import { formatHourly } from '../../utils/formatters'
 import { PageLoader, LoadingOverlay } from '../../components/Spinner'
 import VerifiedSeal from '../../components/VerifiedSeal'
 import { EmptyState, Alert } from '../../components/ui'
+import { specialtyLabel } from '../../constants/specialties'
 
 function RoleBadge({ role }) {
   const isCuidador = role === 'CUIDADOR'
@@ -85,7 +86,7 @@ function UserCard({ user, onOpenChat, viewerIsFamiliar, onVerMais }) {
               key={`${tag}-${i}`}
               className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-violet-100/95 text-violet-800 border border-violet-200/90"
             >
-              {tag}
+              {specialtyLabel(tag)}
             </span>
           ))}
           {specialties.length > 8 && (
@@ -148,7 +149,6 @@ export default function Feed() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
-  const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [fetchError, setFetchError] = useState('')
 
@@ -157,8 +157,7 @@ export default function Feed() {
   const id = localStorage.getItem('meuId')
 
   useEffect(() => {
-    const token = localStorage.getItem('meuToken')
-    if (!token || !id) return undefined
+    if (!id) return undefined
     let cancelled = false
     api
       .get(`/users/${id}`)
@@ -175,8 +174,7 @@ export default function Feed() {
   }, [id])
 
   useEffect(() => {
-    const token = localStorage.getItem('meuToken')
-    if (!token || !id) {
+    if (!id) {
       navigate('/login')
       return undefined
     }
@@ -191,7 +189,6 @@ export default function Feed() {
         const payload = res.data
         const users = Array.isArray(payload) ? payload : payload.users ?? []
         setFeedUsers(users)
-        setTotal(typeof payload.total === 'number' ? payload.total : users.length)
         setTotalPages(typeof payload.totalPages === 'number' ? payload.totalPages : 1)
       } catch (err) {
         console.error(err)
@@ -203,7 +200,6 @@ export default function Feed() {
           return
         }
         setFeedUsers([])
-        setTotal(0)
         setTotalPages(1)
         setFetchError('Não foi possível carregar o feed. Tente novamente em instantes.')
       } finally {
@@ -218,7 +214,7 @@ export default function Feed() {
 
   const filtered = feedUsers.filter((u) => {
     const q = search.toLowerCase()
-    const spec = (Array.isArray(u.specialties) ? u.specialties : []).join(' ').toLowerCase()
+    const spec = (Array.isArray(u.specialties) ? u.specialties : []).map(specialtyLabel).join(' ').toLowerCase()
     return (
       u.name?.toLowerCase().includes(q) ||
       u.bio?.toLowerCase().includes(q) ||
@@ -267,10 +263,11 @@ export default function Feed() {
               Profissionais
             </h1>
           </div>
-          <p className="text-virla-muted text-sm">
-            {total} perfil{total !== 1 ? 'is' : ''} no total
-            {totalPages > 1 && ` · página ${page} de ${totalPages}`}
-          </p>
+          {totalPages > 1 && (
+            <p className="text-virla-muted text-sm">
+              Página {page} de {totalPages}
+            </p>
+          )}
         </div>
 
         <div className="relative mb-6">

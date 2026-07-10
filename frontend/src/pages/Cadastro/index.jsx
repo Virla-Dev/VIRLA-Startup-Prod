@@ -9,19 +9,13 @@ import PersonAdd from '@mui/icons-material/PersonAdd'
 import ArrowBack from '@mui/icons-material/ArrowBack'
 import Badge from '@mui/icons-material/Badge'
 import VerifiedUser from '@mui/icons-material/VerifiedUser'
+import CalendarMonth from '@mui/icons-material/CalendarMonth'
 import api from '../../services/api'
 import { Field, Button, Card } from '../../components/ui'
 import ProfileImageUpload from '../../components/ProfileImageUpload'
 import { isValidCpf, isValidEmail, maskCpf, stripCpf } from '../../utils/validators'
-
-function formatRegisterError(err) {
-  const data = err.response?.data
-  const msg = data?.msg ?? data?.message
-  if (typeof msg === 'string') return msg
-  if (Array.isArray(msg)) return msg.join('\n')
-  if (msg && typeof msg === 'object') return JSON.stringify(msg)
-  return err.message || 'Erro ao criar conta. Verifique os dados e tente novamente.'
-}
+import { registerWithEmail, loginWithGoogle, mapAuthError, getIdToken } from '../../services/auth'
+import { COUNCILS, isValidRegister } from '../../constants/councils'
 
 export default function Cadastro() {
   const navigate = useNavigate()
@@ -29,11 +23,14 @@ export default function Cadastro() {
   const [submitting, setSubmitting] = useState(false)
   const [cpf, setCpf] = useState('')
   const [profileImage, setProfileImage] = useState('')
+  const [council, setCouncil] = useState('')
 
   const inputName = useRef()
   const inputEmail = useRef()
   const inputPassword = useRef()
-  const inputCrmCrf = useRef()
+  const inputConfirmPassword = useRef()
+  const inputRegister = useRef()
+  const inputBirthDate = useRef()
 
   async function createUser(e) {
     e?.preventDefault()
@@ -42,6 +39,8 @@ export default function Cadastro() {
     const name = inputName.current?.value?.trim()
     const email = inputEmail.current?.value?.trim()
     const password = inputPassword.current?.value
+    const confirmPassword = inputConfirmPassword.current?.value
+    const birthDate = inputBirthDate.current?.value
     const cpfDigits = stripCpf(cpf)
 
     if (!name) {
@@ -60,6 +59,21 @@ export default function Cadastro() {
       toast.warning('A senha deve ter pelo menos 6 caracteres.')
       return
     }
+    if (password !== confirmPassword) {
+      toast.warning('As senhas não conferem.')
+      return
+    }
+    if (!birthDate) {
+      toast.warning('Informe sua data de nascimento.')
+      return
+    }
+    const okChars = /^[\p{L}][\p{L} .'-]*$/u.test(name) && name.length >= 2
+    const letters = name.replace(/[^\p{L}]/gu, '')
+    const notRepeated = !(letters.length >= 2 && /^(.)\1+$/u.test(letters))
+    if (!okChars || !notRepeated) {
+      toast.warning('Informe um nome válido (apenas letras).')
+      return
+    }
 
     setSubmitting(true)
     try {
@@ -67,24 +81,52 @@ export default function Cadastro() {
         name,
         role,
         bio: '',
-        email,
         cpf: cpfDigits,
-        password,
+        birthDate,
       }
 
       if (profileImage) payload.profileImage = profileImage
 
       if (role === 'CUIDADOR') {
-        const crmCrf = inputCrmCrf.current?.value?.trim()
-        if (crmCrf) payload.crm_crf = crmCrf
+        const registerNumber = inputRegister.current?.value?.trim()
+        if (council && registerNumber) {
+          if (!isValidRegister(council, registerNumber)) {
+            toast.warning('Número de registro inválido para o conselho informado.')
+            setSubmitting(false)
+            return
+          }
+          payload.council = council
+          payload.registerNumber = registerNumber
+        } else if (council || registerNumber) {
+          toast.warning('Informe o conselho e o número do registro (ou deixe ambos em branco).')
+          setSubmitting(false)
+          return
+        }
       }
 
+      await registerWithEmail(email, password)
       await api.post('/users', payload)
-      toast.success('Conta criada! Faça login para continuar.')
+      await getIdToken(true)
+      toast.success('Conta criada! Confirme seu e-mail para entrar.')
       navigate('/login')
     } catch (err) {
       console.error(err)
-      toast.error(formatRegisterError(err))
+      const msg = mapAuthError(err.code) || err.response?.data?.msg || 'Não foi possível criar a conta.'
+      if (msg) toast.error(msg)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleGoogle() {
+    if (submitting) return
+    setSubmitting(true)
+    try {
+      await loginWithGoogle()
+      navigate('/completar-cadastro')
+    } catch (err) {
+      const msg = mapAuthError(err.code)
+      if (msg) toast.error(msg)
     } finally {
       setSubmitting(false)
     }
@@ -142,14 +184,40 @@ export default function Cadastro() {
             maxLength={14}
           />
 
+          <Field
+            ref={inputBirthDate}
+            label="Data de nascimento"
+            required
+            icon={CalendarMonth}
+            type="date"
+            max={new Date().toISOString().split('T')[0]}
+          />
+
           {role === 'CUIDADOR' && (
-            <Field
-              ref={inputCrmCrf}
-              label="CRM / CRF (opcional)"
-              icon={Badge}
-              type="text"
-              placeholder="Número do conselho"
-            />
+            <>
+              <Field
+                as="select"
+                label="Conselho"
+                icon={Badge}
+                value={council}
+                onChange={(e) => setCouncil(e.target.value)}
+              >
+                <option value="">Conselho (opcional)</option>
+                {COUNCILS.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </Field>
+
+              <Field
+                ref={inputRegister}
+                label="Número do registro"
+                icon={Badge}
+                type="text"
+                placeholder="Número do registro"
+              />
+            </>
           )}
 
           <Field
@@ -172,8 +240,22 @@ export default function Cadastro() {
             autoComplete="new-password"
           />
 
+          <Field
+            ref={inputConfirmPassword}
+            label="Confirmar senha"
+            required
+            icon={Lock}
+            type="password"
+            placeholder="Repita a senha"
+            autoComplete="new-password"
+          />
+
           <Button type="submit" fullWidth loading={submitting} icon={PersonAdd} className="mt-2">
             {submitting ? 'Criando conta…' : 'Criar conta'}
+          </Button>
+
+          <Button type="button" fullWidth variant="secondary" onClick={handleGoogle} disabled={submitting}>
+            Cadastrar com Google
           </Button>
 
           <p className="text-center text-sm text-virla-muted pt-1">

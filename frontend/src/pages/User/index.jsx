@@ -8,6 +8,7 @@ import { calculateAge } from '../../utils/dateUtils'
 import { formatHourly } from '../../utils/formatters'
 import { PageLoader } from '../../components/Spinner'
 import VerifiedSeal from '../../components/VerifiedSeal'
+import { specialtyLabel } from '../../constants/specialties'
 
 export default function User() {
   const { userId } = useParams()
@@ -20,8 +21,7 @@ export default function User() {
   const meId = localStorage.getItem('meuId')
 
   useEffect(() => {
-    const token = localStorage.getItem('meuToken')
-    if (!token || !meId) {
+    if (!meId) {
       navigate('/login')
       return undefined
     }
@@ -144,10 +144,10 @@ export default function User() {
                   {rateLabel}
                 </p>
               )}
-              {(user.crm_crf || user.registerNumber) && (
+              {user.council && user.registerNumber && (
                 <p className="text-sm text-virla-texto/70">
-                  <span className="font-semibold">CRM/CRF: </span>
-                  {user.crm_crf || user.registerNumber}
+                  <span className="font-semibold">Registro: </span>
+                  {user.council} {user.registerNumber}
                 </p>
               )}
               {user.approach && (
@@ -163,7 +163,7 @@ export default function User() {
                       key={`${tag}-${i}`}
                       className="text-xs font-semibold px-2.5 py-1 rounded-full bg-violet-100 text-violet-800 border border-violet-200/80"
                     >
-                      {tag}
+                      {specialtyLabel(tag)}
                     </span>
                   ))}
                 </div>
