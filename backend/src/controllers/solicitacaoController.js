@@ -1,6 +1,7 @@
 import * as solicitacaoRepo from '../repositories/solicitacaoRepository.js'
 import { getUserById, listByIds } from '../repositories/userRepository.js'
 import { logger } from '../lib/logger.js'
+import * as notificationService from '../services/notificationService.js'
 
 /** Projeção do familiar embutido (substitui o join `familiar` do Prisma). */
 function pickFamiliar(user) {
@@ -15,7 +16,7 @@ function pickFamiliar(user) {
 export const createSolicitacao = async (req, res) => {
   try {
     const familiarId = req.userId
-    const { titulo, descricao, tipoCuidado, cidade, estado, urgencia } = req.body
+    const { titulo, descricao, tipoCuidado, cidade, estado, urgencia, valorHora, turno, frequencia, dataInicio } = req.body
 
     const solicitacao = await solicitacaoRepo.create({
       familiarId,
@@ -25,6 +26,10 @@ export const createSolicitacao = async (req, res) => {
       cidade: cidade?.trim() || null,
       estado: estado?.trim().toUpperCase() || null,
       urgencia,
+      valorHora: valorHora === '' || valorHora == null ? null : Number(valorHora),
+      turno: turno || null,
+      frequencia: frequencia || null,
+      dataInicio: dataInicio || null,
     })
 
     return res.status(201).json({ solicitacao })
@@ -59,7 +64,7 @@ export const updateSolicitacao = async (req, res) => {
       return res.status(422).json({ msg: 'Esta solicitação não pode mais ser editada.' })
     }
 
-    const { titulo, descricao, tipoCuidado, cidade, estado, urgencia } = req.body
+    const { titulo, descricao, tipoCuidado, cidade, estado, urgencia, valorHora, turno, frequencia, dataInicio } = req.body
 
     const updated = await solicitacaoRepo.update(id, {
       titulo: titulo.trim(),
@@ -68,6 +73,10 @@ export const updateSolicitacao = async (req, res) => {
       cidade: cidade?.trim() || null,
       estado: estado?.trim().toUpperCase() || null,
       urgencia,
+      valorHora: valorHora === '' || valorHora == null ? null : Number(valorHora),
+      turno: turno || null,
+      frequencia: frequencia || null,
+      dataInicio: dataInicio || null,
     })
 
     return res.status(200).json({ solicitacao: updated })
@@ -94,6 +103,19 @@ export const assumirSolicitacao = async (req, res) => {
     // Transação atômica no repositório: previne que dois cuidadores assumam a
     // mesma solicitação simultaneamente (race condition no read→check→write).
     const updated = await solicitacaoRepo.assumir(id, req.userId)
+    try {
+      const actor = await getUserById(req.userId)
+      await notificationService.notifySolicitacao(req.app.get('io'), {
+        userId: updated.familiarId,
+        type: 'SOLICITACAO_ASSUMIDA',
+        solicitacaoId: updated.id,
+        solicitacaoTitulo: updated.titulo,
+        actorId: req.userId,
+        actorName: actor?.name ?? null,
+      })
+    } catch (err) {
+      logger.error('notification:assumir_failed', { error: err.message, userId: req.userId })
+    }
     return res.status(200).json({ solicitacao: updated })
   } catch (err) {
     if (err instanceof solicitacaoRepo.SolicitacaoError) {
@@ -130,6 +152,19 @@ export const concluirSolicitacao = async (req, res) => {
     }
 
     const updated = await solicitacaoRepo.update(id, { status: 'CONCLUIDA' })
+    try {
+      const actor = await getUserById(req.userId)
+      await notificationService.notifySolicitacao(req.app.get('io'), {
+        userId: solicitacao.assignedCaregiverId,
+        type: 'SOLICITACAO_CONCLUIDA',
+        solicitacaoId: solicitacao.id,
+        solicitacaoTitulo: solicitacao.titulo,
+        actorId: req.userId,
+        actorName: actor?.name ?? null,
+      })
+    } catch (err) {
+      logger.error('notification:concluir_failed', { error: err.message, userId: req.userId })
+    }
     return res.status(200).json({ solicitacao: updated })
   } catch (err) {
     logger.error('solicitacao:concluir_failed', {
@@ -210,6 +245,21 @@ export const cancelSolicitacao = async (req, res) => {
     }
 
     const updated = await solicitacaoRepo.update(id, { status: 'CANCELADA' })
+    if (solicitacao.assignedCaregiverId) {
+      try {
+        const actor = await getUserById(req.userId)
+        await notificationService.notifySolicitacao(req.app.get('io'), {
+          userId: solicitacao.assignedCaregiverId,
+          type: 'SOLICITACAO_CANCELADA',
+          solicitacaoId: solicitacao.id,
+          solicitacaoTitulo: solicitacao.titulo,
+          actorId: req.userId,
+          actorName: actor?.name ?? null,
+        })
+      } catch (err) {
+        logger.error('notification:cancelar_failed', { error: err.message, userId: req.userId })
+      }
+    }
     return res.status(200).json({ solicitacao: updated })
   } catch (err) {
     logger.error('solicitacao:cancel_failed', {
