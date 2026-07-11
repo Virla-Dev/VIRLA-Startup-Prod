@@ -34,7 +34,16 @@ export function usePresence(uid) {
       // onDisconnect não dispara. Marca offline explicitamente ao trocar/limpar o
       // uid, pra o usuário deslogado não ficar "online" fantasma. (Fechar a aba /
       // crash continua coberto pelo onDisconnect registrado acima.)
-      set(statusRef, { state: 'offline', lastChanged: serverTimestamp() }).catch(() => {})
+      //
+      // Usa set com timeout curto: se o token já foi revogado pelo logout, a
+      // escrita vai falhar com permission_denied — ignoramos silenciosamente,
+      // pois o onDisconnect registrado no servidor já cobre esse caso.
+      const timer = setTimeout(() => {
+        set(statusRef, { state: 'offline', lastChanged: serverTimestamp() }).catch(() => {})
+      }, 0)
+      // Se o componente desmontar antes do timer disparar (ex.: StrictMode duplo),
+      // cancela pra não gerar escrita desnecessária.
+      return () => clearTimeout(timer)
     }
   }, [uid])
 }

@@ -172,3 +172,130 @@ Eventos de **autenticação** (login ok/falha, cadastro, exclusão, acessos nega
 **Criados (6 módulos):** `.env.example`, `controllers/observabilityController.js`, `lib/metrics.js`, `lib/userSelects.js`, `middlewares/rateLimit.js`, `middlewares/requestLogger.js`.
 
 **Criados (testes):** 9 arquivos em `tests/`.
+
+---
+
+## 8. Tela Branca em Produção — `onAuthStateChanged` is null
+
+**Data:** 2026-07-11
+**Arquivos alterados:** `frontend/src/services/auth.js`
+
+### Sintoma
+
+```
+Uncaught TypeError: can't access property "onAuthStateChanged", Ir(...) is null
+```
+
+App abre tela branca em produção (Render). Em desenvolvimento local funciona normalmente.
+
+### Causa Raiz
+
+`firebaseAuth` em `frontend/src/services/firebase.js` é inicializado condicionalmente — só recebe valor quando as variáveis `VITE_FIREBASE_*` estão presentes no build. Se não estiverem configuradas no painel do Render, `firebaseAuth` permanece `null`. A função `onAuthChange` chamava `onAuthStateChanged(firebaseAuth, cb)` sem verificar o null, lançando o TypeError e derrubando o app inteiro.
+
+**Por que só ocorre em produção:** o Vite carrega `.env` automaticamente em desenvolvimento. No Render as variáveis precisam ser configuradas manualmente no painel — não são lidas de arquivos `.env` commitados.
+
+### Correção de Configuração
+
+Variáveis `VITE_FIREBASE_*` configuradas no painel **Environment** do serviço frontend no Render. Os valores reais não são commitados — consulte o Firebase Console do projeto para obtê-los.
+
+### Alterações de Código
+
+Adicionados guards defensivos em todas as funções que acessam `firebaseAuth`:
+
+- `onAuthChange` — se `firebaseAuth` for `null`, chama `cb(null)` (trata como deslogado) e retorna unsubscribe vazio, evitando o TypeError
+- `registerWithEmail`, `loginWithEmail`, `loginWithGoogle`, `resetPassword`, `linkPassword` — lançam `Error('Firebase Auth não inicializado.')` explicitamente
+- `logout` — retorna `Promise.resolve()` sem lançar exceção
+- `resendVerification`, `reloadUser` — retornam silenciosamente se `firebaseAuth` ou `currentUser` for nulo
+- `getIdToken` — retorna `Promise.resolve(null)`
+- `hasPasswordProvider` — retorna `false`
+
+---
+
+## 9. Login com Google — "Não foi possível concluir"
+
+**Data:** 2026-07-11
+**Arquivos alterados:** `frontend/src/services/auth.js`
+
+### Sintoma
+
+Botões "Cadastrar com Google" e "Entrar com Google" retornam mensagem genérica de erro. Console mostra:
+
+```
+The current domain is not authorized for OAuth operations.
+Add your domain (www.virla.com.br) to the OAuth redirect domains list
+in the Firebase console -> Authentication -> Settings -> Authorized domains tab.
+```
+
+Os outros avisos no console (fingerprinting do Firefox, cookies particionados) são ruído e não causam o problema.
+
+### Causa Raiz
+
+O domínio `www.virla.com.br` não estava na lista de domínios autorizados do Firebase para operações OAuth. O Firebase rejeita qualquer `signInWithPopup` originado de domínios não cadastrados. O SDK lançava `auth/unauthorized-domain`, que não estava mapeado em `mapAuthError`, caindo na mensagem genérica.
+
+**Por que funciona em desenvolvimento:** o Firebase autoriza `localhost` por padrão. Domínios de produção precisam ser adicionados manualmente.
+
+### Correção de Configuração
+
+Domínio `www.virla.com.br` adicionado em: Firebase Console → Authentication → Settings → **Authorized domains**.
+
+### Alterações de Código
+
+Dois novos códigos adicionados ao mapa `MESSAGES` em `mapAuthError`:
+
+```js
+'auth/unauthorized-domain': 'Este domínio não está autorizado para login com Google. Entre em contato com o suporte.',
+'auth/operation-not-allowed': 'Este método de login não está habilitado. Entre em contato com o suporte.',
+```
+
+---
+
+## 10. PERMISSION_DENIED no RTDB — Presença de Usuário
+
+**Data:** 2026-07-11
+**Arquivos alterados:** `frontend/src/hooks/usePresence.js`, `backend/firebase.json`
+
+### Sintomas
+
+Durante o login:
+```
+[presence] falha ao publicar presença: Error: PERMISSION_DENIED: Permission denied
+```
+
+Ao clicar em Sair:
+```
+@firebase/database: FIREBASE WARNING: set at /status/<uid> failed: permission_denied
+```
+
+### Causa Raiz
+
+**Erro durante o login:** as regras do Realtime Database existiam apenas no arquivo local `backend/firebase.rules.json`, mas nunca tinham sido publicadas. O Firebase usava regras anteriores que negavam escrita em `/status/{uid}`.
+
+**Erro ao sair:** ao clicar em Sair, o token é revogado antes do cleanup do `usePresence` rodar. A tentativa de gravar `{ state: 'offline' }` chegava com token inválido → `permission_denied`. O erro era cosmético — o `onDisconnect` registrado no servidor já garantia o status `offline` —, mas gerava ruído no console.
+
+### Correção de Configuração
+
+Regras do RTDB publicadas manualmente no Firebase Console → **Realtime Database → Rules** (o nó `status` já estava correto no `firebase.rules.json` local).
+
+### Alterações de Código
+
+**`backend/firebase.json`** — adicionada entrada `"database"` para habilitar deploy de regras via CLI futuramente:
+
+```json
+{
+  "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
+  "database": { "rules": "firebase.rules.json" }
+}
+```
+
+**`frontend/src/hooks/usePresence.js`** — cleanup usa `setTimeout(..., 0)` para tornar a gravação de `offline` assíncrona. Se o token já foi revogado e a escrita falhar, falha silenciosamente; o `onDisconnect` do servidor já cobre o cenário:
+
+```js
+// Antes
+set(statusRef, { state: 'offline', lastChanged: serverTimestamp() }).catch(() => {})
+
+// Depois
+const timer = setTimeout(() => {
+  set(statusRef, { state: 'offline', lastChanged: serverTimestamp() }).catch(() => {})
+}, 0)
+return () => clearTimeout(timer)
+```
