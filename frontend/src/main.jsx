@@ -2,14 +2,20 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import './index.css'
+import './comfort.css'
+import './design-system/dashboard.css'
+import './design-system/chat.css'
 import AppShell from './AppShell'
 import { AuthProvider } from './context/AuthContext'
+import { ThemeProvider } from './design-system/theme/ThemeProvider'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
       <AuthProvider>
-        <AppShell />
+        <ThemeProvider>
+          <AppShell />
+        </ThemeProvider>
       </AuthProvider>
     </BrowserRouter>
   </StrictMode>,

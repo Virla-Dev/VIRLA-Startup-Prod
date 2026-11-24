@@ -14,12 +14,14 @@ import PaymentRoutes from './src/routes/paymentRoutes.js'
 import solicitacaoRoutes from './src/routes/solicitacaoRoutes.js'
 import notificationRoutes from './src/routes/notificationRoutes.js'
 import serviceReportRoutes from './src/routes/serviceReportRoutes.js'
+import verificationRoutes from './src/routes/verificationRoutes.js'
 
 import { logger, securityLogger } from './src/lib/logger.js'
 import { requestLogger } from './src/middlewares/requestLogger.js'
 import { healthCheck, dashboard } from './src/controllers/observabilityController.js'
 import { socketAuthMiddleware, registerConnectionEvents } from './src/events/authEvents.js'
 import { registerMessageEvents } from './src/events/messageEvents.js'
+import { bootstrapAdmins } from './src/lib/adminBootstrap.js'
 
 // ─── Resolve __dirname in ES Modules ─────────────────────────────
 const __filename = fileURLToPath(import.meta.url)
@@ -39,6 +41,7 @@ const IS_PROD = NODE_ENV === 'production'
 //
 const allowedOriginsSet = new Set([
   'http://localhost:5173', // Vite dev
+  'http://127.0.0.1:5173', // Vite dev via loopback IPv4
   'http://localhost:3000',
   'https://virla-app.onrender.com', // Frontend na Render
 ])
@@ -127,6 +130,7 @@ app.use(PaymentRoutes)
 app.use(solicitacaoRoutes)
 app.use(serviceReportRoutes)
 app.use(notificationRoutes)
+app.use(verificationRoutes)
 
 // ─── Global error handler ─────────────────────────────────────────
 // CORREÇÃO 5: Não retornar stack trace em produção (vaza informação interna).
@@ -222,6 +226,8 @@ server.listen(PORT, (err) => {
     return
   }
   logger.info('server:started', { port: PORT, env: NODE_ENV })
+  // Equipe VIRLA (VIRLA_ADMIN_EMAILS): garante o claim admin sem script manual.
+  bootstrapAdmins().catch((e) => logger.error('admin:bootstrap_failed', { error: e.message }))
 })
 
 // ─── Graceful shutdown ───────────────────────────────────────────

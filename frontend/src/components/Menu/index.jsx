@@ -4,17 +4,29 @@ import Logout from '@mui/icons-material/Logout'
 import MenuIcon from '@mui/icons-material/Menu'
 import Close from '@mui/icons-material/Close'
 import StarRate from '@mui/icons-material/StarRate'
+import HomeOutlined from '@mui/icons-material/HomeOutlined'
+import ChatBubbleOutline from '@mui/icons-material/ChatBubbleOutlined'
+import SearchOutlined from '@mui/icons-material/SearchOutlined'
+import AssignmentOutlined from '@mui/icons-material/AssignmentOutlined'
+import AccountBalanceWalletOutlined from '@mui/icons-material/AccountBalanceWalletOutlined'
+import PersonOutline from '@mui/icons-material/PersonOutlined'
+import VerifiedUserOutlined from '@mui/icons-material/VerifiedUserOutlined'
+import FactCheckOutlined from '@mui/icons-material/FactCheckOutlined'
 import api from '../../services/api'
 import { logout } from '../../services/auth'
 import NotificationBell from '../NotificationBell'
+import ArrowForward from '@mui/icons-material/ArrowForward'
+import ThemeToggle from '../../design-system/theme/ThemeToggle'
+import { useAuth } from '../../context/AuthContext'
+import { computeCompleteness } from '../ProfileCompleteness/completeness'
 
 // ─── Navigation link definitions ──────────────────────────────────────────────
 
-const BASE_LINKS = [{ to: '/home', label: 'Início' }]
+const BASE_LINKS = [{ to: '/home', label: 'Início' }, { to: '/home?tab=mensagens', label: 'Conversas' }]
 
 /** Familiar: can browse caregiver Feed and manage own Solicitações. */
 const FAMILIAR_LINKS = [
-  { to: '/feed', label: 'Feed' },
+  { to: '/feed', label: 'Encontrar cuidadores' },
   { to: '/perfil', label: 'Perfil' },
   { to: '/solicitacoes', label: 'Solicitações' },
 ]
@@ -22,8 +34,13 @@ const FAMILIAR_LINKS = [
 /** Cuidador: only sees available Solicitações and own Perfil. */
 const CUIDADOR_LINKS = [
   { to: '/solicitacoes-disponiveis', label: 'Solicitações' },
+  { to: '/financas', label: 'Finanças' },
+  { to: '/verificacao', label: 'Verificação' },
   { to: '/perfil', label: 'Perfil' },
 ]
+
+/** Equipe VIRLA (custom claim admin): revisão das verificações. */
+const ADMIN_LINKS = [{ to: '/admin/verificacoes', label: 'Verificações' }]
 
 // TODO: replace with the definitive review form URL
 const FEEDBACK_FORM_URL =
@@ -31,6 +48,17 @@ const FEEDBACK_FORM_URL =
 
 // Desktop breakpoint — must stay in sync with Tailwind's `md` (768 px)
 const DESKTOP_BREAKPOINT = 768
+const NAV_ICONS = {
+  '/home': HomeOutlined,
+  '/home?tab=mensagens': ChatBubbleOutline,
+  '/feed': SearchOutlined,
+  '/perfil': PersonOutline,
+  '/solicitacoes': AssignmentOutlined,
+  '/solicitacoes-disponiveis': AssignmentOutlined,
+  '/financas': AccountBalanceWalletOutlined,
+  '/verificacao': VerifiedUserOutlined,
+  '/admin/verificacoes': FactCheckOutlined,
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -66,15 +94,30 @@ export default function Menu() {
     return () => { cancelled = true }
   }, [role])
 
-  const LINKS =
+  const { profile } = useAuth()
+  const roleLinks =
     role === 'FAMILIAR'
       ? [...BASE_LINKS, ...FAMILIAR_LINKS]
       : role === 'CUIDADOR'
         ? [...BASE_LINKS, ...CUIDADOR_LINKS]
         : BASE_LINKS
+  const LINKS = profile?.isAdmin ? [...roleLinks, ...ADMIN_LINKS] : roleLinks
+
+  // ── Cartão de progresso do perfil (sidebar desktop) ───────────────────────
+  const [progressDismissed, setProgressDismissed] = useState(() => {
+    try { return sessionStorage.getItem('virla_hide_progress') === '1' } catch { return false }
+  })
+  const completeness = profile ? computeCompleteness(profile, profile.role) : null
+  const showProgress = Boolean(completeness && completeness.percent < 100 && !progressDismissed)
+  const dismissProgress = useCallback(() => {
+    setProgressDismissed(true)
+    try { sessionStorage.setItem('virla_hide_progress', '1') } catch { /* armazenamento indisponível */ }
+  }, [])
 
   // ── Helpers ────────────────────────────────────────────────────────────────
-  const isActive = (path) => location.pathname === path
+  const isActive = (path) => path.includes('?')
+    ? `${location.pathname}${location.search}` === path
+    : location.pathname === path && (path !== '/home' || !location.search)
 
   const closeMenu = useCallback(() => setOpen(false), [])
 
@@ -154,6 +197,52 @@ export default function Menu() {
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <>
+      <div className="vd-backdrop" aria-hidden="true" />
+      <aside className="vd-sidebar" aria-label="Navegação da VIRLA">
+        <Link to="/home" className="vd-sidebar-logo"><img src="/favicon.ico" alt="" /><span>VIRLA</span></Link>
+        <p className="vd-sidebar-caption">Cuidar conecta.</p>
+        <nav aria-label="Áreas da plataforma" className="vd-sidebar-nav">
+          {LINKS.map(({ to, label }) => {
+            const Icon = NAV_ICONS[to]
+            return (
+              <Link
+                key={to}
+                to={to}
+                aria-current={isActive(to) ? 'page' : undefined}
+                className={`vd-nav-link ${isActive(to) ? 'active' : ''}`}
+              >
+                <Icon aria-hidden />
+                <span>{label}</span>
+              </Link>
+            )
+          })}
+        </nav>
+        <div className="vd-sidebar-bottom">
+          {showProgress && (
+            <div className="vd-progress-card">
+              <button type="button" className="vd-progress-close" onClick={dismissProgress} aria-label="Ocultar aviso de perfil">
+                <Close sx={{ fontSize: 18 }} />
+              </button>
+              <div className="vd-progress-ring" role="img" aria-label={`Perfil ${completeness.percent}% completo`}>
+                <svg viewBox="0 0 62 62" aria-hidden>
+                  <circle cx="31" cy="31" r="26" fill="none" stroke="rgba(255,255,255,.12)" strokeWidth="6" />
+                  <circle
+                    cx="31" cy="31" r="26" fill="none" stroke="var(--vd-accent)" strokeWidth="6" strokeLinecap="round"
+                    strokeDasharray={2 * Math.PI * 26}
+                    strokeDashoffset={2 * Math.PI * 26 * (1 - completeness.percent / 100)}
+                  />
+                </svg>
+                <span>{completeness.percent}%</span>
+              </div>
+              <strong>Quase lá</strong>
+              <p>Complete seu perfil para transmitir mais confiança.</p>
+              <Link to="/perfil" className="vd-progress-cta">Completar perfil <ArrowForward sx={{ fontSize: 16 }} /></Link>
+            </div>
+          )}
+          <a className="vd-nav-link" href={FEEDBACK_FORM_URL} target="_blank" rel="noopener noreferrer"><StarRate aria-hidden fontSize="small" /> Avaliar sistema</a>
+          <button className="vd-nav-link" type="button" onClick={fazerLogout}><Logout aria-hidden fontSize="small" /> Sair</button>
+        </div>
+      </aside>
       {/* ── Backdrop overlay (mobile only, behind the drawer) ──────────────── */}
       {open && (
         <div
@@ -169,7 +258,7 @@ export default function Menu() {
       )}
 
       {/* ── Header bar ────────────────────────────────────────────────────── */}
-      <header className="fixed top-0 inset-x-0 z-50 bg-white/85 backdrop-blur-md border-b border-virla-roxomid/40 shadow-virla">
+      <header className="comfort-mobile-header fixed top-0 inset-x-0 z-50 bg-white/85 backdrop-blur-md border-b border-virla-roxomid/40 shadow-virla">
         <nav
           className="h-16 max-w-4xl mx-auto px-4 w-full flex items-center justify-between gap-4 font-body"
           aria-label="Navegação principal"
@@ -235,6 +324,10 @@ export default function Menu() {
 
           {/* ── Ações mobile: sino sempre visível + hambúrguer ────────────── */}
           <div className="flex md:hidden items-center gap-1">
+            <ThemeToggle
+              variant="inline"
+              className="p-2 rounded-lg text-virla-roxo hover:bg-virla-roxo/10 transition-colors duration-150"
+            />
             <NotificationBell />
             <button
               ref={hamburgerRef}
